@@ -228,14 +228,6 @@ var timers = [];  // 存储所有 interval ID, 退出时清理
 var dlValEl, ulValEl, dlUnitEl, ulUnitEl, dlBarEl, ulBarEl;
 var ipAddrEl, ipLocEl;
 
-// 前次显示值 · 变更检测, 避免无效 DOM 操作
-var prevDlVal  = '';
-var prevUlVal  = '';
-var prevDlUnit = '';
-var prevUlUnit = '';
-var prevDlPct  = -1;
-var prevUlPct  = -1;
-
 // ──────────────────────────────────────────────
 //  更新速度显示 (核心刷新 · 每2秒)
 // ──────────────────────────────────────────────
@@ -260,37 +252,16 @@ function updateSpeed() {
   var dl = fmtSpeed(dlBps);
   var ul = fmtSpeed(ulBps);
 
-  // ── 变更检测: 仅在值变化时触碰 DOM ──
-  if (dl.v !== prevDlVal) {
-    dlValEl.innerText = dl.v;
-    prevDlVal = dl.v;
-  }
-  if (dl.u !== prevDlUnit) {
-    dlUnitEl.innerText = dl.u;
-    prevDlUnit = dl.u;
-  }
-  if (ul.v !== prevUlVal) {
-    ulValEl.innerText = ul.v;
-    prevUlVal = ul.v;
-  }
-  if (ul.u !== prevUlUnit) {
-    ulUnitEl.innerText = ul.u;
-    prevUlUnit = ul.u;
-  }
+  // ── 更新 DOM ──
+  dlValEl.innerText = dl.v;
+  dlUnitEl.innerText = dl.u;
+  ulValEl.innerText = ul.v;
+  ulUnitEl.innerText = ul.u;
 
   // ── 进度条 (宽为整数百分比, 避免浮点抖动) ──
   var barMax = Math.max(dlBps, ulBps, 1048576 /* 1MB/s 保底 */) * 1.3;
-  var pctDl  = Math.round(Math.min(dlBps / barMax * 100, 100));
-  var pctUl  = Math.round(Math.min(ulBps / barMax * 100, 100));
-
-  if (pctDl !== prevDlPct) {
-    dlBarEl.style.width = pctDl + '%';
-    prevDlPct = pctDl;
-  }
-  if (pctUl !== prevUlPct) {
-    ulBarEl.style.width = pctUl + '%';
-    prevUlPct = pctUl;
-  }
+  dlBarEl.style.width = Math.round(Math.min(dlBps / barMax * 100, 100)) + '%';
+  ulBarEl.style.width = Math.round(Math.min(ulBps / barMax * 100, 100)) + '%';
 
   lastRecv = net.recv;
   lastSent = net.sent;
@@ -298,51 +269,78 @@ function updateSpeed() {
 }
 
 // ──────────────────────────────────────────────
-//  IP 归属地查询 (每5分钟)
+//  IP 归属地查询 (每5分钟) · 两阶段: HTTPS 纯 IP 端点 → 归属地查询
 // ──────────────────────────────────────────────
 function updateIP() {
   ipAddrEl.innerText = '查询中…';
   ipLocEl.innerText  = '';
 
-  var apis = [
-    { url: 'https://api.ip.sb/geoip/',            timeout: 4000 },
-    { url: 'http://ip-api.com/json/?lang=zh-CN&fields=country,city,isp,query,regionName', timeout: 4000 },
-    { url: 'https://ipapi.co/json/',               timeout: 5000 }
+  // Phase 1 — HTTPS plain-IP endpoints (go through proxy/VPN)
+  var ipSources = [
+    { url: 'https://ifconfig.me/ip',  timeout: 3000 },
+    { url: 'https://api.ipify.org/',  timeout: 3000 },
+    { url: 'https://icanhazip.com/', timeout: 3000 },
   ];
 
-  for (var i = 0; i < apis.length; i++) {
+  var realIP = '', locStr = '';
+
+  for (var i = 0; i < ipSources.length; i++) {
     try {
-      var raw = httpGet(apis[i].url, apis[i].timeout);
+      var raw = httpGet(ipSources[i].url, ipSources[i].timeout);
       if (!raw) continue;
-
-      var data = JSON.parse(raw);
-      var ip   = data.ip || data.query || '';
-      var city = data.city || '';
-      var reg  = data.region || data.regionName || data.region_name || '';
-      var isp  = data.isp || data.org || data.organization || '';
-      var cnt  = data.country || data.country_name || '';
-
-      if (!ip) continue;
-
-      ipAddrEl.innerText = ip;
-
-      // 组装位置信息
-      var parts = [];
-      if (cnt && cnt !== '未知') parts.push(cnt);
-      if (reg && reg !== cnt && reg !== '未知') parts.push(reg);
-      if (city && city !== reg && city !== '未知') parts.push(city);
-      var loc = parts.join(' · ') || '—';
-      if (isp && isp !== '未知') loc += ' · ' + isp;
-      ipLocEl.innerText = loc;
-      ipLocEl.title = loc;  // 鼠标悬停看完整信息
-      return;
+      var ip = raw.replace(/[\r\n]/g, '').trim();
+      if (ip && /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(ip)) {
+        realIP = ip;
+        break;
+      }
     } catch(e) {}
   }
 
-  // 全部 API 失败
-  ipAddrEl.innerText = '—';
-  ipLocEl.innerText  = '查询失败';
+  if (!realIP) {
+    ipAddrEl.innerText = '—';
+    ipLocEl.innerText  = '查询失败';
+    return;
+  }
+
+  ipAddrEl.innerText = realIP;
+
+  // Phase 2 — enrich with location if not already resolved
+  if (!locStr) {
+    var locAPIs = [
+      { url: 'http://ip-api.com/json/' + realIP + '?lang=zh-CN&fields=country,city,isp,regionName', timeout: 4000 },
+      { url: 'https://ipapi.co/' + realIP + '/json/', timeout: 5000 },
+    ];
+    for (var j = 0; j < locAPIs.length; j++) {
+      try {
+        var raw2 = httpGet(locAPIs[j].url, locAPIs[j].timeout);
+        if (!raw2) continue;
+        var data2 = JSON.parse(raw2);
+        var ip2 = data2.ip || data2.query || '';
+        if (ip2 && ip2 !== realIP) continue;  // IP mismatch, use next API
+        locStr = buildLocStr(data2);
+        if (locStr) break;
+      } catch(e) {}
+    }
+  }
+
+  ipLocEl.innerText = locStr || '—';
+  ipLocEl.title = locStr || realIP;
 }
+
+function buildLocStr(data) {
+  var parts = [];
+  var cnt  = data.country || data.country_name || '';
+  var reg  = data.region || data.regionName || data.region_name || '';
+  var city = data.city || '';
+  var isp  = data.isp || data.org || data.organization || '';
+  if (cnt && cnt !== '未知') parts.push(cnt);
+  if (reg && reg !== cnt && reg !== '未知') parts.push(reg);
+  if (city && city !== reg && city !== '未知') parts.push(city);
+  var loc = parts.join(' · ');
+  if (isp && isp !== '未知') loc += (loc ? ' · ' : '') + isp;
+  return loc;
+}
+
 
 // ──────────────────────────────────────────────
 //  窗口透明化 · PowerShell + Win32 API
@@ -477,9 +475,9 @@ function init() {
     lastTick = new Date();
   }
 
-  // 立即刷新一次
-  updateIP();
+  // 立即刷新一次 (网速优先显示, IP 查询可能因同步 HTTP 而阻塞)
   updateSpeed();
+  updateIP();
 
   // ── 定时器 ──
   timers.push(setInterval(updateSpeed, 2000));          // 网速: 每2秒

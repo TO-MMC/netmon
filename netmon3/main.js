@@ -1,5 +1,5 @@
 // NetMon 3.0 — Electron main process
-const { app, BrowserWindow, Tray, Menu, ipcMain, screen } = require('electron')
+const { app, BrowserWindow, Tray, Menu, ipcMain, screen, net } = require('electron')
 const { spawn } = require('child_process')
 const path = require('path')
 const fs = require('fs')
@@ -128,46 +128,97 @@ async function pollSpeed() {
 }
 
 // ── GeoIP ─────────────────────────────────────────
+// Two-phase: (1) get real public IP via HTTPS (through proxy/VPN),
+//            (2) enrich with location by explicit IP lookup.
+
+const IP_REGEX = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/
+
+function buildLoc(data) {
+  const parts = []
+  const cnt = data.country || data.country_name || ''
+  const reg = data.region || data.regionName || data.region_name || ''
+  const city = data.city || ''
+  const isp = data.isp || data.org || data.organization || ''
+  if (cnt && cnt !== '未知')                parts.push(cnt)
+  if (reg && reg !== cnt && reg !== '未知') parts.push(reg)
+  if (city && city !== reg && city !== '未知') parts.push(city)
+  let loc = parts.join(' · ')
+  if (isp && isp !== '未知') loc += (loc ? ' · ' : '') + isp
+  return loc
+}
+
+async function fetchText(url, timeout) {
+  const controller = new AbortController()
+  const t = setTimeout(() => controller.abort(), timeout)
+  try {
+    const resp = await net.fetch(url, {
+      signal: controller.signal,
+      headers: { 'User-Agent': 'NetMon/3.0' },
+    })
+    if (!resp.ok) throw new Error('HTTP ' + resp.status)
+    return await resp.text()
+  } finally { clearTimeout(t) }
+}
+
+async function fetchJSON(url, timeout) {
+  const controller = new AbortController()
+  const t = setTimeout(() => controller.abort(), timeout)
+  try {
+    const resp = await net.fetch(url, {
+      signal: controller.signal,
+      headers: { 'User-Agent': 'NetMon/3.0' },
+    })
+    if (!resp.ok) throw new Error('HTTP ' + resp.status)
+    return await resp.json()
+  } finally { clearTimeout(t) }
+}
+
 async function queryGeoIP() {
-  const apis = [
-    { url: 'http://ip-api.com/json/?lang=zh-CN&fields=country,city,isp,query,regionName', timeout: 4000 },
-    { url: 'https://api.ip.sb/geoip/', timeout: 4000 },
-    { url: 'https://ipapi.co/json/', timeout: 5000 },
+  // ═══ Phase 1 — Get real public IP via HTTPS (goes through system proxy/VPN) ═══
+  const ipSources = [
+    { url: 'https://ifconfig.me/ip',   timeout: 4000 },
+    { url: 'https://api.ipify.org/',   timeout: 4000 },
+    { url: 'https://icanhazip.com/',  timeout: 4000 },
   ]
 
-  for (const api of apis) {
-    try {
-      const controller = new AbortController()
-      const t = setTimeout(() => controller.abort(), api.timeout)
-
-      const resp = await fetch(api.url, {
-        signal: controller.signal,
-        headers: { 'User-Agent': 'NetMon/3.0' },
+  let realIP = ''
+  try {
+    realIP = await Promise.any(ipSources.map(({ url, timeout }) =>
+      fetchText(url, timeout).then(text => {
+        const ip = text.replace(/[\r\n]/g, '').trim()
+        if (!IP_REGEX.test(ip)) throw new Error('invalid ip: ' + ip)
+        return ip
       })
-      clearTimeout(t)
-
-      if (!resp.ok) continue
-      const data = await resp.json()
-
-      const ip = data.ip || data.query || ''
-      if (!ip) continue
-
-      const parts = []
-      const cnt = data.country || data.country_name || ''
-      const reg = data.region || data.regionName || data.region_name || ''
-      const city = data.city || ''
-      const isp = data.isp || data.org || data.organization || ''
-
-      if (cnt && cnt !== '未知') parts.push(cnt)
-      if (reg && reg !== cnt && reg !== '未知') parts.push(reg)
-      if (city && city !== reg && city !== '未知') parts.push(city)
-      let loc = parts.join(' · ') || '—'
-      if (isp && isp !== '未知') loc += ' · ' + isp
-
-      return { ip, loc }
-    } catch (_) { continue }
+    ))
+  } catch (_) {
+    return { ip: '—', loc: '查询失败' }
   }
-  return { ip: '—', loc: '查询失败' }
+
+  // ═══ Phase 2 — Enrich with location (query by explicit IP, not auto-detect) ═══
+  const locSources = [
+    {
+      url: `http://ip-api.com/json/${realIP}?lang=zh-CN&fields=country,city,isp,regionName`,
+      timeout: 4000,
+    },
+    { url: `https://ipapi.co/${realIP}/json/`, timeout: 5000 },
+  ]
+
+  try {
+    const data = await Promise.any(locSources.map(({ url, timeout }) =>
+      fetchJSON(url, timeout).then(json => {
+        const returnedIP = json.ip || json.query || ''
+        if (returnedIP && returnedIP !== realIP) {
+          throw new Error('ip mismatch: ' + returnedIP)
+        }
+        return json
+      })
+    ))
+    const loc = buildLoc(data)
+    return { ip: realIP, loc }
+  } catch (_) {
+    // IP is correct even if location lookup failed
+    return { ip: realIP, loc: '—' }
+  }
 }
 
 async function pollGeoIP() {
