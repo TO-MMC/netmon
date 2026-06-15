@@ -238,26 +238,28 @@ async function pollGeoIP() {
   return result
 }
 
-// ── Quick IP check (10s) — only Phase 1, no GeoIP API hit ──
+// ── Quick IP check (30s) — Phase 1 only, round-robin across 3 free APIs ──
 let lastKnownIP = ''
+let ipApiIndex = 0
+const IP_APIS = [
+  { url: 'https://ifconfig.me/ip',   timeout: 3000 },
+  { url: 'https://api.ipify.org/',   timeout: 3000 },
+  { url: 'https://icanhazip.com/',  timeout: 3000 },
+]
 
 async function pollIPQuick() {
   try {
-    const ip = await Promise.any([
-      { url: 'https://ifconfig.me/ip',   timeout: 3000 },
-      { url: 'https://api.ipify.org/',   timeout: 3000 },
-      { url: 'https://icanhazip.com/',  timeout: 3000 },
-    ].map(({ url, timeout }) =>
-      fetchText(url, timeout).then(text => {
-        const ip = text.replace(/[\r\n]/g, '').trim()
-        if (!IP_REGEX.test(ip)) throw new Error('invalid')
-        return ip
-      })
-    ))
+    // Round-robin: each poll hits only 1 API, spreads 960 req/day per service
+    const api = IP_APIS[ipApiIndex % IP_APIS.length]
+    ipApiIndex++
+
+    const text = await fetchText(api.url, api.timeout)
+    const ip = text.replace(/[\r\n]/g, '').trim()
+    if (!IP_REGEX.test(ip)) throw new Error('invalid')
 
     if (ip !== lastKnownIP) {
       lastKnownIP = ip
-      // IP changed — do full GeoIP lookup
+      // IP changed — do full GeoIP lookup (only on change)
       const loc = await enrichLocation(ip)
       if (widgetAlive()) {
         widgetWin.webContents.send('ip-update', ip, loc)
@@ -506,7 +508,7 @@ app.whenReady().then(async () => {
   // Start GeoIP — full lookup first, then quick IP checks every 10s
   pollGeoIP().then(r => { if (r) lastKnownIP = r.ip })
   geoIPTimer = setInterval(pollGeoIP, 5 * 60 * 1000)  // full refresh every 5min
-  ipQuickTimer = setInterval(pollIPQuick, 10_000)       // IP-only check every 10s
+  ipQuickTimer = setInterval(pollIPQuick, 30_000)       // IP-only check every 30s, round-robin
 
   // Periodic DB save (sql.js keeps DB in memory)
   setInterval(saveDB, 30_000)
