@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="x-ua-compatible" content="IE=edge">
+<title>NetMon</title>
+<hta:application
+  id="netmon"
+  applicationname="NetMon"
+  windowstate="normal"
+  border="none"
+  innerborder="no"
+  caption="no"
+  sysmenu="no"
+  showintaskbar="no"
+  contextmenu="no"
+  selection="no"
+  maximizebutton="no"
+  minimizebutton="no"
+  scroll="no"
+  singleinstance="yes"
+/>
+<style>
+  /* ═══════════════════════════════════════════
+     NetMon Desktop Widget · 透明桌面插件
+     ═══════════════════════════════════════════ */
+
+  /* ── Reset ── */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  /*
+     CHROMA KEY 说明:
+     body 背景设为 #010101,
+     PowerShell 通过 SetLayeredWindowAttributes 将此色设为透明色键.
+     若 PS 启透明失败, 则显示为极深色背景, 依然美观.
+  */
+  body {
+    background: #010101;
+    color: #E0E0E0;
+    font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
+    font-size: 12px;
+    overflow: hidden;
+    cursor: default;
+    -ms-user-select: none;
+    user-select: none;
+    /* 初始窗口大小, init() 中会精确调整 */
+    width: 208px;
+    height: 92px;
+  }
+
+  /* ── 主容器 · 完全透明背景 ── */
+  #main {
+    padding: 12px 14px 10px;
+    background: transparent;
+  }
+
+  /* ── 速度行 · 左右两栏 ── */
+  #speedRow {
+    display: flex;
+    margin-bottom: 6px;
+  }
+  .speedCol {
+    flex: 1;
+    min-width: 0;
+  }
+  .speedCol + .speedCol { margin-left: 14px; }
+
+  /* 标签 */
+  .speedLabel {
+    font-size: 10px;
+    font-weight: 500;
+    color: #AAAAAA;
+    letter-spacing: 0.4px;
+    margin-bottom: 1px;
+    text-shadow: 0 0 6px rgba(0,0,0,0.95), 0 0 2px rgba(0,0,0,0.9);
+  }
+
+  /* 速度数值 — 大字号, 高对比 */
+  .speedVal {
+    font-size: 26px;
+    font-weight: 700;
+    font-family: 'Consolas', 'Segoe UI', monospace;
+    line-height: 1.05;
+    /* 多重阴影模拟描边, 确保在任何桌面背景下清晰可读 */
+    text-shadow:
+      -1px -1px 0 rgba(0,0,0,0.85),
+       1px -1px 0 rgba(0,0,0,0.85),
+      -1px  1px 0 rgba(0,0,0,0.85),
+       1px  1px 0 rgba(0,0,0,0.85),
+       0  0   6px rgba(0,0,0,0.7);
+  }
+  .speedVal.dl { color: #00E0FF; }
+  .speedVal.ul { color: #FF7070; }
+
+  /* 单位 */
+  .speedUnit {
+    font-size: 10px;
+    color: #BBBBBB;
+    margin-left: 3px;
+    font-weight: 500;
+    text-shadow: 0 0 6px rgba(0,0,0,0.95), 0 0 2px rgba(0,0,0,0.9);
+  }
+
+  /* ── 进度条 ── */
+  .barTrack {
+    height: 2px;
+    background: rgba(255,255,255,0.07);
+    margin-top: 3px;
+  }
+  .barFill {
+    height: 2px;
+    width: 0%;
+    /* 不设 transition, 避免持续重绘 */
+  }
+  .barFill.dl { background: #00E0FF; }
+  .barFill.ul { background: #FF7070; }
+
+  /* ── IP 信息 ── */
+  #ipRow {
+    font-family: 'Consolas', 'Microsoft YaHei', monospace;
+    font-size: 10px;
+    line-height: 1.55;
+    background: transparent;
+  }
+  #ipAddr {
+    color: #EEEEEE;
+    font-weight: 600;
+    text-shadow: 0 0 6px rgba(0,0,0,0.9), 0 0 2px rgba(0,0,0,0.85);
+  }
+  #ipLoc {
+    color: #BBBBBB;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-shadow: 0 0 5px rgba(0,0,0,0.85), 0 0 2px rgba(0,0,0,0.8);
+  }
+</style>
+
+<script language="JScript">
+// ══════════════════════════════════════════════
+//  NetMon HTA · Desktop Widget
+//  透明桌面网速监控插件
+// ══════════════════════════════════════════════
+
+var shell = new ActiveXObject("WScript.Shell");
+var fso   = new ActiveXObject("Scripting.FileSystemObject");
+
+// ──────────────────────────────────────────────
+//  HTTP GET · 同步 (仅用于低频 IP 查询)
+// ──────────────────────────────────────────────
+function httpGet(url, timeoutMs) {
+  var progs = [
+    'MSXML2.ServerXMLHTTP.6.0',
+    'MSXML2.ServerXMLHTTP.3.0',
+    'WinHttp.WinHttpRequest.5.1',
+    'MSXML2.XMLHTTP.6.0'
+  ];
+  for (var i = 0; i < progs.length; i++) {
+    try {
+      var xhr = new ActiveXObject(progs[i]);
+      try { xhr.setTimeouts(timeoutMs, timeoutMs, timeoutMs, timeoutMs); } catch(e2) {}
+      xhr.open('GET', url, false);
+      try { xhr.send(); } catch(e3) { continue; }
+      if (xhr.status >= 200 && xhr.status < 300) {
+        return xhr.responseText;
+      }
+    } catch(e) { continue; }
+  }
+  return null;
+}
+
+// ──────────────────────────────────────────────
+//  执行命令 · 返回 stdout
+// ──────────────────────────────────────────────
+function runCmd(cmd) {
+  try {
+    var exec = shell.Exec(cmd);
+    return exec.StdOut.ReadAll();
+  } catch(e) { return ''; }
+}
+
+// ──────────────────────────────────────────────
+//  获取网络总字节数 (netstat -e)
+// ──────────────────────────────────────────────
+function getNetBytes() {
+  // chcp 437 强制英文输出, 避免中文环境下正则匹配失败
+  var raw = runCmd('cmd.exe /c "chcp 437 >nul && netstat -e"');
+  if (!raw) return null;
+
+  // 匹配 "Bytes" 行中的两大数字 (带千位分隔逗号)
+  var m = raw.match(/Bytes[\s\S]*?([\d,]{5,})\s+([\d,]{5,})/);
+  if (m) {
+    return {
+      recv: parseInt(m[1].replace(/,/g, '')),
+      sent: parseInt(m[2].replace(/,/g, ''))
+    };
+  }
+
+  // 回退: 匹配任意连续两个大数字 (适配中文/其他语言)
+  m = raw.match(/([\d,]{5,})\s+([\d,]{5,})/);
+  if (m) {
+    return {
+      recv: parseInt(m[1].replace(/,/g, '')),
+      sent: parseInt(m[2].replace(/,/g, ''))
+    };
+  }
+  return null;
+}
+
+// ──────────────────────────────────────────────
+//  格式化速度
+// ──────────────────────────────────────────────
+function fmtSpeed(bps) {
+  bps = Math.abs(bps);
+  if (bps < 1024)            return { v: bps.toFixed(1), u: 'B/s'  };
+  if (bps < 1048576)         return { v: (bps/1024).toFixed(1),       u: 'KB/s' };
+  if (bps < 1073741824)      return { v: (bps/1048576).toFixed(1),    u: 'MB/s' };
+  return { v: (bps/1073741824).toFixed(2), u: 'GB/s' };
+}
+
+// ──────────────────────────────────────────────
+//  状态变量
+// ──────────────────────────────────────────────
+var lastRecv = 0, lastSent = 0, lastTick = new Date();
+var timers = [];  // 存储所有 interval ID, 退出时清理
+
+// DOM 缓存
+var dlValEl, ulValEl, dlUnitEl, ulUnitEl, dlBarEl, ulBarEl;
+var ipAddrEl, ipLocEl;
+
+// 前次显示值 · 变更检测, 避免无效 DOM 操作
+var prevDlVal  = '';
+var prevUlVal  = '';
+var prevDlUnit = '';
+var prevUlUnit = '';
+var prevDlPct  = -1;
+var prevUlPct  = -1;
+
+// ──────────────────────────────────────────────
+//  更新速度显示 (核心刷新 · 每2秒)
+// ──────────────────────────────────────────────
+function updateSpeed() {
+  var now  = new Date();
+  var net = getNetBytes();
+  if (!net) return;
+
+  var dt = (now - lastTick) / 1000;
+  if (dt <= 0) return;
+
+  // 首次读数: 仅记录基线, 不显示
+  if (lastRecv <= 0) {
+    lastRecv  = net.recv;
+    lastSent  = net.sent;
+    lastTick  = now;
+    return;
+  }
+
+  var dlBps = Math.max(0, (net.recv - lastRecv) / dt);
+  var ulBps = Math.max(0, (net.sent - lastSent) / dt);
+  var dl = fmtSpeed(dlBps);
+  var ul = fmtSpeed(ulBps);
+
+  // ── 变更检测: 仅在值变化时触碰 DOM ──
+  if (dl.v !== prevDlVal) {
+    dlValEl.innerText = dl.v;
+    prevDlVal = dl.v;
+  }
+  if (dl.u !== prevDlUnit) {
+    dlUnitEl.innerText = dl.u;
+    prevDlUnit = dl.u;
+  }
+  if (ul.v !== prevUlVal) {
+    ulValEl.innerText = ul.v;
+    prevUlVal = ul.v;
+  }
+  if (ul.u !== prevUlUnit) {
+    ulUnitEl.innerText = ul.u;
+    prevUlUnit = ul.u;
+  }
+
+  // ── 进度条 (宽为整数百分比, 避免浮点抖动) ──
+  var barMax = Math.max(dlBps, ulBps, 1048576 /* 1MB/s 保底 */) * 1.3;
+  var pctDl  = Math.round(Math.min(dlBps / barMax * 100, 100));
+  var pctUl  = Math.round(Math.min(ulBps / barMax * 100, 100));
+
+  if (pctDl !== prevDlPct) {
+    dlBarEl.style.width = pctDl + '%';
+    prevDlPct = pctDl;
+  }
+  if (pctUl !== prevUlPct) {
+    ulBarEl.style.width = pctUl + '%';
+    prevUlPct = pctUl;
+  }
+
+  lastRecv = net.recv;
+  lastSent = net.sent;
+  lastTick = now;
+}
+
+// ──────────────────────────────────────────────
+//  IP 归属地查询 (每5分钟)
+// ──────────────────────────────────────────────
+function updateIP() {
+  ipAddrEl.innerText = '查询中…';
+  ipLocEl.innerText  = '';
+
+  var apis = [
+    { url: 'https://api.ip.sb/geoip/',            timeout: 4000 },
+    { url: 'http://ip-api.com/json/?lang=zh-CN&fields=country,city,isp,query,regionName', timeout: 4000 },
+    { url: 'https://ipapi.co/json/',               timeout: 5000 }
+  ];
+
+  for (var i = 0; i < apis.length; i++) {
+    try {
+      var raw = httpGet(apis[i].url, apis[i].timeout);
+      if (!raw) continue;
+
+      var data = JSON.parse(raw);
+      var ip   = data.ip || data.query || '';
+      var city = data.city || '';
+      var reg  = data.region || data.regionName || data.region_name || '';
+      var isp  = data.isp || data.org || data.organization || '';
+      var cnt  = data.country || data.country_name || '';
+
+      if (!ip) continue;
+
+      ipAddrEl.innerText = ip;
+
+      // 组装位置信息
+      var parts = [];
+      if (cnt && cnt !== '未知') parts.push(cnt);
+      if (reg && reg !== cnt && reg !== '未知') parts.push(reg);
+      if (city && city !== reg && city !== '未知') parts.push(city);
+      var loc = parts.join(' · ') || '—';
+      if (isp && isp !== '未知') loc += ' · ' + isp;
+      ipLocEl.innerText = loc;
+      ipLocEl.title = loc;  // 鼠标悬停看完整信息
+      return;
+    } catch(e) {}
+  }
+
+  // 全部 API 失败
+  ipAddrEl.innerText = '—';
+  ipLocEl.innerText  = '查询失败';
+}
+
+// ──────────────────────────────────────────────
+//  窗口透明化 · PowerShell + Win32 API
+//  使用 LWA_COLORKEY 将 #010101 设为透明色键
+// ──────────────────────────────────────────────
+function enableTransparency() {
+  try {
+    // 将 PS 脚本写入临时目录
+    var psPath = fso.GetSpecialFolder(2) + '\\~netmon_glass.ps1';
+    var psFile = fso.CreateTextFile(psPath, true, false);
+    psFile.Write(
+      'Add-Type -TypeDefinition @"\n' +
+      'using System;\n' +
+      'using System.Runtime.InteropServices;\n' +
+      'public class NMW {\n' +
+      '  [DllImport("user32.dll")]\n' +
+      '  public static extern IntPtr FindWindow(string lpClassName, string lpWindowName);\n' +
+      '  [DllImport("user32.dll")]\n' +
+      '  public static extern int GetWindowLong(IntPtr hWnd, int nIndex);\n' +
+      '  [DllImport("user32.dll")]\n' +
+      '  public static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);\n' +
+      '  [DllImport("user32.dll")]\n' +
+      '  public static extern bool SetLayeredWindowAttributes(IntPtr hWnd, uint crKey, byte bAlpha, uint dwFlags);\n' +
+      '}\n' +
+      '"@\n' +
+      'Start-Sleep -Milliseconds 600\n' +
+      '$h = [NMW]::FindWindow($null, "NetMon")\n' +
+      'if ($h -ne [IntPtr]::Zero) {\n' +
+      '  $style = [NMW]::GetWindowLong($h, -20)\n' +
+      '  [NMW]::SetWindowLong($h, -20, $style -bor 0x80000)\n' +
+      '  [NMW]::SetLayeredWindowAttributes($h, 0x010101, 0, 1)\n' +
+      '}\n'
+    );
+    psFile.Close();
+
+    // 后台执行 (不等待), 隐藏窗口
+    shell.Run(
+      'powershell -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + psPath + '"',
+      0,   // 隐藏窗口
+      false // 不等待
+    );
+  } catch(e) {
+    // 透明化失败不影响使用, 保留深色背景
+  }
+}
+
+// ──────────────────────────────────────────────
+//  拖拽 · 整窗口可拖动
+// ──────────────────────────────────────────────
+var dragging = false, dragX = 0, dragY = 0, dragMoved = false;
+
+function onMouseDown() {
+  // 仅在鼠标左键时拖拽
+  if (window.event.button !== 0) return;
+  dragging  = true;
+  dragMoved = false;
+  dragX     = window.event.screenX - window.screenLeft;
+  dragY     = window.event.screenY - window.screenTop;
+}
+
+function onMouseMove() {
+  if (!dragging) return;
+  var sx = window.event.screenX;
+  var sy = window.event.screenY;
+  // 仅在实际移动时调用 moveTo (减少重绘)
+  if (Math.abs(sx - dragX - window.screenLeft) > 0 ||
+      Math.abs(sy - dragY - window.screenTop)  > 0) {
+    window.moveTo(sx - dragX, sy - dragY);
+    dragMoved = true;
+  }
+}
+
+function onMouseUp() {
+  dragging = false;
+}
+
+// ──────────────────────────────────────────────
+//  清理 · 退出时释放所有定时器
+// ──────────────────────────────────────────────
+function cleanup() {
+  for (var i = 0; i < timers.length; i++) {
+    clearInterval(timers[i]);
+  }
+  timers = [];
+
+  // 清理临时 PS 脚本
+  try {
+    var psPath = fso.GetSpecialFolder(2) + '\\~netmon_glass.ps1';
+    if (fso.FileExists(psPath)) fso.DeleteFile(psPath, true);
+  } catch(e) {}
+}
+
+// ──────────────────────────────────────────────
+//  初始化
+// ──────────────────────────────────────────────
+function init() {
+  // ── 缓存 DOM 引用 ──
+  dlValEl  = document.getElementById('dlVal');
+  ulValEl  = document.getElementById('ulVal');
+  dlUnitEl = document.getElementById('dlUnit');
+  ulUnitEl = document.getElementById('ulUnit');
+  dlBarEl  = document.getElementById('dlBar');
+  ulBarEl  = document.getElementById('ulBar');
+  ipAddrEl = document.getElementById('ipAddr');
+  ipLocEl  = document.getElementById('ipLoc');
+
+  // ── 窗口定位: 桌面右下角 ──
+  var sw = screen.availWidth;
+  var sh = screen.availHeight;
+  window.moveTo(sw - 224, sh - 110);
+  window.resizeTo(208, 92);
+
+  // ── 整窗口拖拽 ──
+  document.body.onmousedown = onMouseDown;
+  document.onmousemove      = onMouseMove;
+  document.onmouseup        = onMouseUp;
+  // 防止拖拽时触发文本选择/拖放
+  document.body.ondragstart = function() { return false; };
+  document.body.onselectstart = function() { return false; };
+
+  // ── 快捷键 ──
+  document.onkeydown = function() {
+    var k = window.event.keyCode;
+    if (k === 27 /* Esc */) { cleanup(); window.close(); }
+  };
+
+  // ── 首次数据采集 ──
+  var net = getNetBytes();
+  if (net) {
+    lastRecv = net.recv;
+    lastSent = net.sent;
+    lastTick = new Date();
+  }
+
+  // 立即刷新一次
+  updateIP();
+  updateSpeed();
+
+  // ── 定时器 ──
+  timers.push(setInterval(updateSpeed, 2000));          // 网速: 每2秒
+  timers.push(setInterval(updateIP,    5 * 60 * 1000)); // IP:   每5分钟
+
+  // ── 退出清理 ──
+  window.onbeforeunload = cleanup;
+
+  // ── 透明化窗口 (异步, 不阻塞) ──
+  enableTransparency();
+}
+
+window.onload = init;
+</script>
+</head>
+<body>
+
+<div id="main">
+  <!-- ═══════ 网速 ═══════ -->
+  <div id="speedRow">
+    <div class="speedCol">
+      <div class="speedLabel">&#x25BC; 下载</div>
+      <span class="speedVal dl" id="dlVal">—</span>
+      <span class="speedUnit" id="dlUnit">KB/s</span>
+      <div class="barTrack"><div class="barFill dl" id="dlBar"></div></div>
+    </div>
+    <div class="speedCol">
+      <div class="speedLabel">&#x25B2; 上传</div>
+      <span class="speedVal ul" id="ulVal">—</span>
+      <span class="speedUnit" id="ulUnit">KB/s</span>
+      <div class="barTrack"><div class="barFill ul" id="ulBar"></div></div>
+    </div>
+  </div>
+
+  <!-- ═══════ IP ═══════ -->
+  <div id="ipRow">
+    <span id="ipAddr">检测中…</span>
+    <br>
+    <span id="ipLoc">—</span>
+  </div>
+</div>
+
+</body>
+</html>

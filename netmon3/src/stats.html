@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
+    background: #18181e;
+    color: #ccc;
+    padding: 16px;
+  }
+  h2 { color: #eee; font-size: 16px; margin-bottom: 12px; }
+  .summary {
+    display: flex; gap: 20px; flex-wrap: wrap;
+    background: #1e1e26; border-radius: 8px; padding: 12px 16px; margin-bottom: 16px;
+  }
+  .summaryItem { min-width: 120px; }
+  .summaryLabel { font-size: 10px; color: #888; }
+  .summaryVal { font-size: 18px; font-weight: 700; font-family: Consolas, monospace; }
+  .dl { color: #00E0FF; }
+  .ul { color: #FF7070; }
+  .charts { display: flex; flex-direction: column; gap: 16px; }
+  .chartBox {
+    background: #1e1e26; border-radius: 8px; padding: 12px;
+  }
+  .chartBox h3 { font-size: 12px; color: #888; margin-bottom: 8px; }
+  canvas { width: 100%; height: 220px; }
+</style>
+</head>
+<body>
+
+<h2>流量统计</h2>
+
+<div class="summary" id="summary">
+  <div class="summaryItem">
+    <div class="summaryLabel">峰值下载</div>
+    <div class="summaryVal dl" id="peakDl">—</div>
+  </div>
+  <div class="summaryItem">
+    <div class="summaryLabel">峰值上传</div>
+    <div class="summaryVal ul" id="peakUl">—</div>
+  </div>
+</div>
+
+<div class="charts">
+  <div class="chartBox">
+    <h3>今日分时网速</h3>
+    <canvas id="hourlyChart"></canvas>
+  </div>
+  <div class="chartBox">
+    <h3>近 30 天日均网速</h3>
+    <canvas id="dailyChart"></canvas>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js">
+</script>
+<script>
+  const DL_COLOR = '#00E0FF'
+  const UL_COLOR = '#FF7070'
+  const GRID_COLOR = 'rgba(255,255,255,0.06)'
+  const TEXT_COLOR = '#888'
+
+  function formatSpeed(bps) {
+    bps = Math.abs(bps)
+    if (bps < 1024) return bps.toFixed(1) + ' B/s'
+    if (bps < 1048576) return (bps / 1024).toFixed(1) + ' KB/s'
+    if (bps < 1073741824) return (bps / 1048576).toFixed(1) + ' MB/s'
+    return (bps / 1073741824).toFixed(2) + ' GB/s'
+  }
+
+  // Load peaks
+  window.netmon.getTodayPeaks().then(row => {
+    const peakDl = (row && row.max_dl) || 0
+    const peakUl = (row && row.max_ul) || 0
+    document.getElementById('peakDl').textContent = formatSpeed(peakDl)
+    document.getElementById('peakUl').textContent = formatSpeed(peakUl)
+  })
+
+  // Hourly chart
+  window.netmon.getHourlyData().then(rows => {
+    const ctx = document.getElementById('hourlyChart').getContext('2d')
+    const labels = rows.map(r => (r.h || '00') + ':00')
+    const dlData = rows.map(r => (r.avg_dl || 0) / 1048576)
+    const ulData = rows.map(r => (r.avg_ul || 0) / 1048576)
+
+    new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [
+          { label: '下载 MB/s', data: dlData, borderColor: DL_COLOR, backgroundColor: DL_COLOR + '20', fill: true, tension: 0.3, pointRadius: 2 },
+          { label: '上传 MB/s', data: ulData, borderColor: UL_COLOR, backgroundColor: UL_COLOR + '20', fill: true, tension: 0.3, pointRadius: 2 },
+        ]
+      },
+      options: {
+        responsive: true,
+        plugins: { legend: { labels: { color: TEXT_COLOR, font: { size: 10 } } } },
+        scales: {
+          x: { ticks: { color: TEXT_COLOR, font: { size: 9 } }, grid: { color: GRID_COLOR } },
+          y: { ticks: { color: TEXT_COLOR, font: { size: 9 } }, grid: { color: GRID_COLOR } },
+        }
+      }
+    })
+  })
+
+  // Daily chart
+  window.netmon.getDailyData().then(rows => {
+    const ctx = document.getElementById('dailyChart').getContext('2d')
+    const labels = rows.map(r => (r.d || '').slice(5)) // MM-DD
+    const dlData = rows.map(r => (r.avg_dl || 0) / 1048576)
+    const ulData = rows.map(r => (r.avg_ul || 0) / 1048576)
+
+    new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [
+          { label: '下载 MB/s', data: dlData, backgroundColor: DL_COLOR + '99' },
+          { label: '上传 MB/s', data: ulData, backgroundColor: UL_COLOR + '99' },
+        ]
+      },
+      options: {
+        responsive: true,
+        plugins: { legend: { labels: { color: TEXT_COLOR, font: { size: 10 } } } },
+        scales: {
+          x: { ticks: { color: TEXT_COLOR, font: { size: 8 } }, grid: { color: GRID_COLOR } },
+          y: { ticks: { color: TEXT_COLOR, font: { size: 9 } }, grid: { color: GRID_COLOR } },
+        }
+      }
+    })
+  })
+</script>
+</body>
+</html>

@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
+    font-size: 13px;
+    background: #1a1a20;
+    color: #ccc;
+    padding: 16px;
+  }
+  h2 { font-size: 15px; margin-bottom: 12px; color: #eee; }
+  .section { margin-bottom: 16px; }
+  label { display: flex; align-items: center; gap: 8px; margin: 6px 0; cursor: pointer; }
+  input[type="checkbox"] { width: 16px; height: 16px; accent-color: #00E0FF; }
+  input[type="range"] { flex: 1; accent-color: #00E0FF; }
+  select, input[type="number"] {
+    background: #2a2a30; color: #ccc; border: 1px solid #444;
+    padding: 4px 8px; border-radius: 4px; font-size: 12px;
+  }
+  .row { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+  .btn {
+    background: #00A0C0; color: #fff; border: none;
+    padding: 8px 20px; border-radius: 4px; cursor: pointer; font-size: 13px;
+  }
+  .btn:hover { background: #00C8E8; }
+  .btn-row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+  .dim { color: #888; font-size: 11px; }
+</style>
+</head>
+<body>
+
+<h2>NetMon 设置</h2>
+
+<div class="section">
+  <h3 style="font-size:12px;color:#888;margin-bottom:6px;">常规</h3>
+  <label><input type="checkbox" id="autoStart"> 开机自动启动</label>
+  <label><input type="checkbox" id="startMinimized"> 启动时最小化到托盘</label>
+</div>
+
+<div class="section">
+  <h3 style="font-size:12px;color:#888;margin-bottom:6px;">显示</h3>
+  <label><input type="checkbox" id="alwaysOnTop" checked> 始终保持在前</label>
+  <label><input type="checkbox" id="widgetLocked"> 锁定位置</label>
+  <div class="row">
+    <span>透明度:</span>
+    <input type="range" id="opacity" min="10" max="100" value="100" style="flex:1">
+    <span id="opacityVal" style="min-width:36px">100%</span>
+  </div>
+</div>
+
+<div class="section">
+  <h3 style="font-size:12px;color:#888;margin-bottom:6px;">监控</h3>
+  <div class="row">
+    <span>刷新间隔:</span>
+    <input type="number" id="interval" min="500" max="10000" step="500" value="2000" style="width:80px">
+    <span class="dim">ms</span>
+  </div>
+  <div class="row">
+    <span>网络接口:</span>
+    <select id="interface"><option value="auto">自动 (所有网卡)</option></select>
+  </div>
+</div>
+
+<div class="section">
+  <h3 style="font-size:12px;color:#888;margin-bottom:6px;">统计</h3>
+  <div class="row">
+    <span>数据保留:</span>
+    <input type="number" id="retentionDays" min="1" max="365" value="30" style="width:60px">
+    <span class="dim">天</span>
+  </div>
+</div>
+
+<div class="btn-row">
+  <button class="btn" id="saveBtn">保存</button>
+  <button class="btn" id="cancelBtn" style="background:#444;">取消</button>
+</div>
+
+<script>
+  const saveBtn = document.getElementById('saveBtn')
+  const cancelBtn = document.getElementById('cancelBtn')
+  const opacitySlider = document.getElementById('opacity')
+  const opacityVal = document.getElementById('opacityVal')
+
+  opacitySlider.addEventListener('input', () => {
+    opacityVal.textContent = opacitySlider.value + '%'
+  })
+
+  // Load settings
+  window.netmon.getSettings().then(s => {
+    document.getElementById('autoStart').checked = s.autoStart
+    document.getElementById('startMinimized').checked = s.startMinimized
+    document.getElementById('alwaysOnTop').checked = s.alwaysOnTop
+    document.getElementById('widgetLocked').checked = s.widgetLocked
+    document.getElementById('interval').value = s.interval
+    document.getElementById('retentionDays').value = s.retentionDays
+    opacitySlider.value = Math.round(s.opacity * 100)
+    opacityVal.textContent = opacitySlider.value + '%'
+  })
+
+  // Load interfaces
+  window.netmon.getInterfaces().then(names => {
+    const sel = document.getElementById('interface')
+    names.forEach(n => {
+      const opt = document.createElement('option')
+      opt.value = n
+      opt.textContent = n
+      sel.appendChild(opt)
+    })
+  })
+
+  saveBtn.addEventListener('click', () => {
+    const settings = {
+      autoStart: document.getElementById('autoStart').checked,
+      startMinimized: document.getElementById('startMinimized').checked,
+      alwaysOnTop: document.getElementById('alwaysOnTop').checked,
+      widgetLocked: document.getElementById('widgetLocked').checked,
+      interval: parseInt(document.getElementById('interval').value),
+      interface: document.getElementById('interface').value,
+      opacity: parseInt(opacitySlider.value) / 100,
+      retentionDays: parseInt(document.getElementById('retentionDays').value),
+    }
+    window.netmon.saveSettings(settings).then(() => window.close())
+  })
+
+  cancelBtn.addEventListener('click', () => window.close())
+</script>
+</body>
+</html>

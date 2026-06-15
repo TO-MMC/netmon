@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+  /* ══════ NetMon Glass Widget ══════ */
+  * { margin:0; padding:0; box-sizing:border-box; }
+
+  html, body {
+    width: 100%; height: 100%;
+    background: transparent;
+    overflow: hidden;
+    -webkit-app-region: drag;
+    user-select: none;
+    font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
+  }
+
+  #glass {
+    margin: 0;
+    width: 100%; height: 100%;
+    background: rgba(18, 18, 22, 0.86);
+    border: 0.5px solid rgba(255, 255, 255, 0.07);
+    border-radius: 12px;
+    padding: 12px 16px 10px;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── Speed row ── */
+  #speedRow {
+    display: flex;
+    gap: 14px;
+    margin-bottom: 4px;
+  }
+  .speedCol {
+    flex: 1;
+    min-width: 0;
+  }
+  .speedLabel {
+    font-size: 9px;
+    font-weight: 500;
+    color: #AAAAAA;
+    margin-bottom: 0;
+    text-shadow: 0 0 5px rgba(0,0,0,0.8);
+  }
+  .speedValRow {
+    display: flex;
+    align-items: baseline;
+    gap: 3px;
+  }
+  .speedVal {
+    font-size: 24px;
+    font-weight: 700;
+    font-family: 'Consolas', 'Microsoft YaHei', monospace;
+    line-height: 1.0;
+    text-shadow: -1px -1px 0 rgba(0,0,0,0.7), 1px -1px 0 rgba(0,0,0,0.7),
+                 -1px  1px 0 rgba(0,0,0,0.7), 1px  1px 0 rgba(0,0,0,0.7);
+  }
+  .speedVal.dl { color: #00E0FF; }
+  .speedVal.ul { color: #FF7070; }
+  .speedUnit {
+    font-size: 9px;
+    color: #BBBBBB;
+    text-shadow: 0 0 5px rgba(0,0,0,0.8);
+  }
+
+  /* ── Progress bars ── */
+  .barTrack {
+    height: 2px;
+    background: rgba(255,255,255,0.07);
+    margin-top: 3px;
+    border-radius: 1px;
+  }
+  .barFill {
+    height: 2px;
+    width: 0%;
+    border-radius: 1px;
+    transition: width 0.6s ease;
+  }
+  .barFill.dl { background: #00E0FF; }
+  .barFill.ul { background: #FF7070; }
+
+  /* ── IP row ── */
+  #ipRow {
+    font-family: 'Consolas', 'Microsoft YaHei', monospace;
+    font-size: 9px;
+    line-height: 1.5;
+  }
+  #ipAddr {
+    color: #EEEEEE;
+    font-weight: 600;
+    text-shadow: 0 0 5px rgba(0,0,0,0.8);
+  }
+  #ipLoc {
+    color: #BBBBBB;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-shadow: 0 0 5px rgba(0,0,0,0.7);
+  }
+</style>
+</head>
+<body>
+
+<div id="glass">
+  <div id="speedRow">
+    <div class="speedCol">
+      <div class="speedLabel">&#x25E5; 下载</div>
+      <div class="speedValRow">
+        <span class="speedVal dl" id="dlVal">—</span>
+        <span class="speedUnit" id="dlUnit">KB/s</span>
+      </div>
+      <div class="barTrack"><div class="barFill dl" id="dlBar"></div></div>
+    </div>
+    <div class="speedCol">
+      <div class="speedLabel">&#x25E3; 上传</div>
+      <div class="speedValRow">
+        <span class="speedVal ul" id="ulVal">—</span>
+        <span class="speedUnit" id="ulUnit">KB/s</span>
+      </div>
+      <div class="barTrack"><div class="barFill ul" id="ulBar"></div></div>
+    </div>
+  </div>
+
+  <div id="ipRow">
+    <span id="ipAddr">检测中…</span><br>
+    <span id="ipLoc">—</span>
+  </div>
+</div>
+
+<script src="widget.js"></script>
+</body>
+</html>
