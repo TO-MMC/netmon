@@ -80,6 +80,8 @@ let tray = null
 let monitorTimer = null
 let lastRecv = 0, lastSent = 0, lastTick = 0
 
+const widgetAlive = () => widgetWin && !widgetWin.isDestroyed()
+
 // ── Network monitoring ────────────────────────────
 function getNetBytes() {
   return new Promise((resolve) => {
@@ -230,9 +232,58 @@ async function queryGeoIP() {
 
 async function pollGeoIP() {
   const result = await queryGeoIP()
-  if (widgetWin && !widgetWin.isDestroyed()) {
+  if (widgetAlive()) {
     widgetWin.webContents.send('ip-update', result.ip, result.loc)
   }
+  return result
+}
+
+// ── Quick IP check (10s) — only Phase 1, no GeoIP API hit ──
+let lastKnownIP = ''
+
+async function pollIPQuick() {
+  try {
+    const ip = await Promise.any([
+      { url: 'https://ifconfig.me/ip',   timeout: 3000 },
+      { url: 'https://api.ipify.org/',   timeout: 3000 },
+      { url: 'https://icanhazip.com/',  timeout: 3000 },
+    ].map(({ url, timeout }) =>
+      fetchText(url, timeout).then(text => {
+        const ip = text.replace(/[\r\n]/g, '').trim()
+        if (!IP_REGEX.test(ip)) throw new Error('invalid')
+        return ip
+      })
+    ))
+
+    if (ip !== lastKnownIP) {
+      lastKnownIP = ip
+      // IP changed — do full GeoIP lookup
+      const loc = await enrichLocation(ip)
+      if (widgetAlive()) {
+        widgetWin.webContents.send('ip-update', ip, loc)
+      }
+    }
+  } catch (_) { /* silent fail, next poll will retry */ }
+}
+
+async function enrichLocation(ip) {
+  const locSources = [
+    {
+      url: `http://ip-api.com/json/${ip}?lang=zh-CN&fields=country,city,isp,regionName`,
+      timeout: 4000,
+    },
+    { url: `https://ipapi.co/${ip}/json/`, timeout: 5000 },
+  ]
+  try {
+    const data = await Promise.any(locSources.map(({ url, timeout }) =>
+      fetchJSON(url, timeout).then(json => {
+        const returnedIP = json.ip || json.query || ''
+        if (returnedIP && returnedIP !== ip) throw new Error('mismatch')
+        return json
+      })
+    ))
+    return buildLoc(data)
+  } catch (_) { return '—' }
 }
 
 // ── Widget window ─────────────────────────────────
@@ -433,12 +484,14 @@ ipcMain.handle('hide-to-tray', () => {
 function cleanup() {
   if (monitorTimer) clearInterval(monitorTimer)
   if (geoIPTimer) clearInterval(geoIPTimer)
+  if (ipQuickTimer) clearInterval(ipQuickTimer)
   saveDB()
   if (db) { db.close(); db = null }
 }
 
 // ── App lifecycle ─────────────────────────────────
 let geoIPTimer = null
+let ipQuickTimer = null
 
 app.whenReady().then(async () => {
   await initDB()
@@ -450,9 +503,10 @@ app.whenReady().then(async () => {
   pollSpeed()
   monitorTimer = setInterval(pollSpeed, store.get('interval', 2000))
 
-  // Start GeoIP
-  pollGeoIP()
-  geoIPTimer = setInterval(pollGeoIP, 5 * 60 * 1000)
+  // Start GeoIP — full lookup first, then quick IP checks every 10s
+  pollGeoIP().then(r => { if (r) lastKnownIP = r.ip })
+  geoIPTimer = setInterval(pollGeoIP, 5 * 60 * 1000)  // full refresh every 5min
+  ipQuickTimer = setInterval(pollIPQuick, 10_000)       // IP-only check every 10s
 
   // Periodic DB save (sql.js keeps DB in memory)
   setInterval(saveDB, 30_000)
