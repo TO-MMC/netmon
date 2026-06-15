@@ -6,6 +6,13 @@ const fs = require('fs')
 const Store = require('electron-store')
 const initSqlJs = require('sql.js')
 
+// ── Single instance lock ───────────────────────────
+const gotLock = app.requestSingleInstanceLock()
+if (!gotLock) { app.quit(); process.exit(0) }
+app.on('second-instance', () => {
+  if (widgetWin) { widgetWin.show(); widgetWin.focus() }
+})
+
 // ── Settings ──────────────────────────────────────
 const store = new Store({
   name: 'config',
