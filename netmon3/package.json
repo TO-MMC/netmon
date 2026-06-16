@@ -5,7 +5,8 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "build": "electron-builder"
+    "build": "electron-builder",
+    "postbuild": "node_modules/rcedit/bin/rcedit-x64.exe dist/NetMon 3.0.0.exe --set-icon dist/.icon-ico/icon.ico"
   },
   "build": {
     "appId": "com.netmon.widget",
@@ -16,8 +17,7 @@
     "win": {
       "target": "portable",
       "icon": "assets/icon.png",
-      "sign": null,
-      "signAndEditExecutable": false
+      "sign": null
     },
     "files": [
       "main.js",
@@ -29,7 +29,8 @@
   },
   "devDependencies": {
     "electron": "^29.4.6",
-    "electron-builder": "^24.13.3"
+    "electron-builder": "^24.13.3",
+    "rcedit": "^5.0.2"
   },
   "dependencies": {
     "electron-store": "^8.0.0",
