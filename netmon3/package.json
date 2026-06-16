@@ -16,7 +16,8 @@
     "win": {
       "target": "portable",
       "icon": "assets/icon.png",
-      "sign": null
+      "sign": null,
+      "signAndEditExecutable": false
     },
     "files": [
       "main.js",

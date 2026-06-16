@@ -183,11 +183,15 @@ async function fetchJSON(url, timeout) {
 }
 
 async function queryGeoIP() {
-  // ═══ Phase 1 — Get real public IP via HTTPS (goes through system proxy/VPN) ═══
+  // ═══ Phase 1 — Get real public IP via HTTPS ═══
+  // Multiple sources to survive GFW / regional blocks
   const ipSources = [
-    { url: 'https://ifconfig.me/ip',   timeout: 4000 },
-    { url: 'https://api.ipify.org/',   timeout: 4000 },
-    { url: 'https://icanhazip.com/',  timeout: 4000 },
+    { url: 'https://ifconfig.me/ip',     timeout: 4000 },
+    { url: 'https://api.ipify.org/',     timeout: 4000 },
+    { url: 'https://icanhazip.com/',    timeout: 4000 },
+    { url: 'https://api.ip.sb/ip',       timeout: 4000 },
+    { url: 'https://api-ipv4.ip.sb/ip',  timeout: 4000 },
+    { url: 'https://v4.ident.me/',       timeout: 4000 },
   ]
 
   let realIP = ''
@@ -200,10 +204,19 @@ async function queryGeoIP() {
       })
     ))
   } catch (_) {
-    return { ip: '—', loc: '查询失败' }
+    // Phase 1 failed — try combined fallback via HTTP (one request for IP + location)
+    try {
+      const combo = await fetchJSON('http://ip-api.com/json/?lang=zh-CN&fields=query,country,city,isp,regionName', 5000)
+      realIP = (combo.query || '').trim()
+      if (!IP_REGEX.test(realIP)) throw new Error('invalid')
+      const loc = buildLoc(combo)
+      return { ip: realIP, loc: loc || '—' }
+    } catch (_) {
+      return { ip: '—', loc: '查询失败' }
+    }
   }
 
-  // ═══ Phase 2 — Enrich with location (query by explicit IP, not auto-detect) ═══
+  // ═══ Phase 2 — Enrich with location (query by explicit IP) ═══
   const locSources = [
     {
       url: `http://ip-api.com/json/${realIP}?lang=zh-CN&fields=country,city,isp,regionName`,
@@ -242,9 +255,12 @@ async function pollGeoIP() {
 let lastKnownIP = ''
 let ipApiIndex = 0
 const IP_APIS = [
-  { url: 'https://ifconfig.me/ip',   timeout: 3000 },
-  { url: 'https://api.ipify.org/',   timeout: 3000 },
-  { url: 'https://icanhazip.com/',  timeout: 3000 },
+  { url: 'https://ifconfig.me/ip',    timeout: 3000 },
+  { url: 'https://api.ipify.org/',    timeout: 3000 },
+  { url: 'https://icanhazip.com/',   timeout: 3000 },
+  { url: 'https://api.ip.sb/ip',      timeout: 3000 },
+  { url: 'https://api-ipv4.ip.sb/ip', timeout: 3000 },
+  { url: 'https://v4.ident.me/',      timeout: 3000 },
 ]
 
 async function pollIPQuick() {
@@ -265,7 +281,22 @@ async function pollIPQuick() {
         widgetWin.webContents.send('ip-update', ip, loc)
       }
     }
-  } catch (_) { /* silent fail, next poll will retry */ }
+  } catch (_) {
+    // Round-robin API failed — try fallback via HTTP
+    try {
+      const combo = await fetchJSON('http://ip-api.com/json/?fields=query', 4000)
+      const ip = (combo.query || '').trim()
+      if (!IP_REGEX.test(ip)) throw new Error('invalid')
+
+      if (ip !== lastKnownIP) {
+        lastKnownIP = ip
+        const loc = await enrichLocation(ip)
+        if (widgetAlive()) {
+          widgetWin.webContents.send('ip-update', ip, loc)
+        }
+      }
+    } catch (_) { /* both APIs failed, next poll will retry */ }
+  }
 }
 
 async function enrichLocation(ip) {
